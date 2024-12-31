@@ -1,7 +1,7 @@
 import type { Dayjs } from 'dayjs';
 
 export class ActivityDto {
-  id: number;
+  id: string;
   title: string;
   time: number;
   maxTime: boolean;
