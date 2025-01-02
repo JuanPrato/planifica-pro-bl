@@ -2,11 +2,10 @@ import { Injectable } from '@nestjs/common';
 import { FirebaseService } from '../firebase/firebase.service';
 import { UserDto } from '../user/dto/user.dto';
 import { DayDto } from './dto/day.dto';
-import { formatToKey, fromKey } from '../utils/time.util';
-import dayjs from 'dayjs';
+import { fromKey } from '../utils/time.util';
 import { ActivityDto } from './dto/activity.dto';
 import { CreateActivityDto } from './dto/create-activity.dto';
-import { UpdateActivityDto } from "./dto/update-activity.dto";
+import { UpdateActivityDto } from './dto/update-activity.dto';
 
 @Injectable()
 export class DayService {
@@ -16,13 +15,15 @@ export class DayService {
     const result = await this.firebase.getActivities(user, dates);
 
     return dates.map((date) => {
+      const key = fromKey(date);
+
       return {
-        date: fromKey(date),
+        date: key,
         activities: result
-          .filter((act) => formatToKey(dayjs(act.date)) === date)
+          .filter((act) => act.day === date)
           .map((act) => ({
             ...act,
-            date: fromKey(date),
+            date: key,
           })) as ActivityDto[],
       };
     });

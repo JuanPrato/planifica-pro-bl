@@ -2,23 +2,28 @@ import { Inject, Injectable } from '@nestjs/common';
 import { app, auth, firestore } from 'firebase-admin';
 import Auth = auth.Auth;
 import { UserDto } from '../user/dto/user.dto';
-import DocumentData = firestore.DocumentData;
-import QuerySnapshot = firestore.QuerySnapshot;
 import { CreateActivityDto } from '../day/dto/create-activity.dto';
-import { formatToKey, fromKey } from '../utils/time.util';
+import { formatToKey } from '../utils/time.util';
 import dayjs from 'dayjs';
 import Timestamp = firestore.Timestamp;
 import { UpdateActivityDto } from '../day/dto/update-activity.dto';
-import { DocNotFoundError } from "../exceptions/DocNotFoundError";
+import { DocNotFoundError } from '../exceptions/DocNotFoundError';
+
+const COLLECTIONS = {
+  USERS: 'users',
+  DAYS: 'days',
+  ACTIVITIES: 'activities',
+} as const;
 
 @Injectable()
 export class FirebaseService {
   #db: FirebaseFirestore.Firestore;
-  #collection: FirebaseFirestore.CollectionReference;
+  #users: FirebaseFirestore.CollectionReference;
   #auth: Auth;
 
   constructor(@Inject('FIREBASE_APP') private firebaseApp: app.App) {
     this.#db = firebaseApp.firestore();
+    this.#users = this.#db.collection(COLLECTIONS.USERS);
     this.#auth = firebaseApp.auth();
   }
 
@@ -27,33 +32,23 @@ export class FirebaseService {
   }
 
   async getActivities(user: UserDto, dates: string[]) {
-    const days = await this.#db
-      .collection(user.uid)
+    const userRef = await this.getUserRef(user);
+
+    const days = await userRef
+      .collection('days')
       .where('date', 'in', dates)
       .get();
 
     if (days.empty) {
       return [];
     }
-    const activityRefs: Promise<QuerySnapshot<DocumentData, DocumentData>>[] =
-      [];
 
-    days.forEach((day) => {
-      activityRefs.push(day.ref.collection('activities').get());
-    });
+    const activities = await userRef
+      .collection(COLLECTIONS.ACTIVITIES)
+      .where('day', 'in', dates)
+      .get();
 
-    const result: DocumentData[] = [];
-
-    for (const activityRef of activityRefs) {
-      const activityCol = await activityRef;
-
-      activityCol.docs.forEach((act) => {
-        const data = act.data();
-        result.push({ ...data, id: act.id });
-      });
-    }
-
-    return result;
+    return activities.docs.map((act) => act.data());
   }
 
   async saveActivity(
@@ -62,16 +57,25 @@ export class FirebaseService {
   ): Promise<string> {
     const key = formatToKey(dayjs(activity.date));
 
-    const dayCol = await this.#db.collection(user.uid).doc(key).get();
+    const userRef = await this.getUserRef(user);
 
-    if (!dayCol.exists) {
-      await this.#db.collection(user.uid).doc(key).set({ date: key });
+    const dayCol = await userRef
+      .collection(COLLECTIONS.DAYS)
+      .where('date', '==', key)
+      .get();
+
+    if (dayCol.empty) {
+      await userRef.collection(COLLECTIONS.DAYS).add({ date: key });
+    } else {
+      const dayDoc = dayCol.docs.at(0);
+      const dayData = dayDoc?.data();
+      if (dayData.completed) {
+        await dayDoc.ref.set({ completed: false });
+      }
     }
 
-    const doc = await this.#db
-      .collection(user.uid)
-      .doc(key)
-      .collection('activities')
+    const doc = await userRef
+      .collection(COLLECTIONS.ACTIVITIES)
       .add({ ...activity, date: Timestamp.fromDate(activity.date.toDate()) });
 
     await doc.update({ id: doc.id });
@@ -80,12 +84,10 @@ export class FirebaseService {
   }
 
   async updateActivity(user: UserDto, activity: UpdateActivityDto) {
-    const key = formatToKey(dayjs(activity.date));
+    const userRef = await this.getUserRef(user);
 
-    const activityRef = await this.#db
-      .collection(user.uid)
-      .doc(key)
-      .collection('activities')
+    const activityRef = await userRef
+      .collection(COLLECTIONS.ACTIVITIES)
       .doc(activity.id)
       .get();
 
@@ -96,5 +98,9 @@ export class FirebaseService {
     delete activity.date;
 
     await activityRef.ref.update({ ...activity });
+  }
+
+  private async getUserRef(user: UserDto) {
+    return this.#users.doc(user.uid);
   }
 }
